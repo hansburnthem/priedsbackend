@@ -45,26 +45,44 @@ router.use('/edit-repacking-data', async (req, res) => {
   /**
    * @type {stock_read_log}
    */
-  const data = await stock_read_log.findOne({payload: req.body.payload})
+  let data = await stock_read_log.findOne({payload: req.body.payload})
   if(data === null) {
     res.json({statusCode: 0, message: 'No Data'})
+    return
   }
 
   /**
    * @type {Array}
    */
   let qrData = data.qr_list
-  for (let i = 0; i < 1; i++) {
+  for (let i = 0; i < req.body.new_qr_list.length; i++) {
     const element = req.body.new_qr_list[i];
-    let dataNew = await stock_read_log.findOne({qr_list: {$elemMatch: {payload: element.payload}}})
-    qrData.push(dataNew.qr_list.find(el => el.payload === element.payload))
-    // dataNew.qr_list.splice(dataNew.qr_list.indexOf(element.payload), 1)
-    dataNew.qr_list = dataNew.qr_list.filter(el => el.payload !== element.payload)
-    dataNew.qty = dataNew.qty - 1
-    // await stock_read_log.updateOne({qr_list: {$elemMatch: {payload: element.payload}}})
-    dataNew.save()
+    let oldStockReadLog = await stock_read_log.findOne({qr_list: {$elemMatch: {payload: element.payload}}})
+    qrData.push(oldStockReadLog.qr_list.find(el => el.payload === element.payload))
+    data.qty++
+    oldStockReadLog.qr_list = oldStockReadLog.qr_list.filter(el => el.payload !== element.payload)
+    oldStockReadLog.qty--
+    await stock_read_log.updateOne({payload: oldStockReadLog.payload}, {qty: oldStockReadLog.qty, qr_list: oldStockReadLog.qr_list})
   }
-  res.json({statusCode: 1, data: qrData})
+
+  // Bagian ini digunakan apabila ingin menghapus rejected qr dari qr_list
+  // for (let i = 0; i < req.body.reject_qr_list.length; i++) {
+  //   const element = req.body.reject_qr_list[i];
+  //   qrData.splice(qrData.findIndex(el => el.payload === element.payload) ,1)
+  // }
+
+  // Bagian ini digunakan apabila ingin soft delete rejected qr dari qr_list dengan mengubah status sesuai dengan readme
+  for (let i = 0; i < req.body.reject_qr_list.length; i++) {
+    const element = req.body.reject_qr_list[i];
+    let id = qrData.findIndex(el => el.payload === element.payload)
+    qrData[id].status = 0
+    qrData[id].status_qc = 1
+    data.qty--
+  }
+
+  await stock_read_log.updateOne({payload: data.payload}, {qty: data.qty, qr_list: data.qr_list})
+
+  res.json({statusCode: 1, data: data.qr_list.filter(el => el.status === 1)})
 
 })
 
