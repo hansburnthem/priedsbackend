@@ -42,47 +42,91 @@ router.use('/import-data', async (req, res) => {
 })
 
 router.use('/edit-repacking-data', async (req, res) => {
+  // logic flow: post json -> retrieve stock read log data using json.paylaod and json.company_id -> 
+  // check if data not found on db -> looping array new qr (retrieve stock read log using new_qr_list[idx].payload -> check if data null -> 
+  // push the main stock read log qr_list using the new qr -> +1 qty to main stock read log -> update qty and qr_list stock read log from new_qr_list[idx].payload ) ->
+  // looping array reject qr (find the index from the main stock_read_log.qr_list -> check if not found -> -1 qty to main stock read log -> change the status and status_qc to 0 and 1) ->
+  // update the main stock read log data.
+  // I use soft delete method to remove the qr from qr_list and retrieve the qr_list using filter.
+
   /**
    * @type {stock_read_log}
    */
-  let data = await stock_read_log.findOne({payload: req.body.payload})
-  if(data === null) {
-    res.json({statusCode: 0, message: 'No Data'})
-    return
-  }
-
+  let data = await stock_read_log.findOne({payload: req.body.payload, company_id: req.body.company_id})
+  if(data === null) return res.json({statusCode: 0, message: 'No Data'})
+    
   /**
    * @type {Array}
    */
   let qrData = data.qr_list
-  for (let i = 0; i < req.body.new_qr_list.length; i++) {
-    const element = req.body.new_qr_list[i];
+  
+  // Uncomment this code section if want to use mongo transaction, requirement: mongo replica set 
+  //#region from this
+  // const session = await stock_read_log.startSession()
+  // session.startTransaction()
+
+  // try {
+  //   for (const element of req.body.new_qr_list) {
+  //     let oldStockReadLog = await stock_read_log.findOne({qr_list: {$elemMatch: {payload: element.payload}}})
+  //     if(oldStockReadLog === null) throw new Error(`${element.payload} not found in database`)
+  //     qrData.push(oldStockReadLog.qr_list.find(el => el.payload === element.payload))
+  //     data.qty++
+  //     await stock_read_log.updateOne({
+  //       payload: oldStockReadLog.payload}, {
+  //         qty: --oldStockReadLog.qty, 
+  //         qr_list: oldStockReadLog.qr_list.filter(el => el.payload !== element.payload)
+  //       }, { session: session })
+  //   }
+  
+  //   for (const element of req.body.reject_qr_list) {
+  //     const id = qrData.findIndex(el => el.payload === element.payload)
+  //     if(id === -1) throw new Error(`${element.payload} not found in ${data.payload} qr_list`)
+  //     data.qty--
+  
+  //     // splice array qr apabila ingin menghapus data dari db
+  //     // qrData.splice(id ,1) 
+
+  //     qrData[id].status = 0
+  //     qrData[id].status_qc = 1
+  //   }
+  
+  //   await stock_read_log.updateOne({payload: data.payload}, {qty: data.qty, qr_list: data.qr_list}, {session: session})
+  //   await session.commitTransaction()
+  //   session.endSession()
+  // } catch (error) {
+  //   await session.abortTransaction()
+  //   session.endSession()
+  //   return res.json({statusCode: 0, message: error.message})
+  // }
+  //#endregion to this
+
+  for (const element of req.body.new_qr_list) {
     let oldStockReadLog = await stock_read_log.findOne({qr_list: {$elemMatch: {payload: element.payload}}})
+    if(oldStockReadLog === null) return res.json({statusCode: 0, message: `${element.payload} not found in database`})
     qrData.push(oldStockReadLog.qr_list.find(el => el.payload === element.payload))
     data.qty++
-    oldStockReadLog.qr_list = oldStockReadLog.qr_list.filter(el => el.payload !== element.payload)
-    oldStockReadLog.qty--
-    await stock_read_log.updateOne({payload: oldStockReadLog.payload}, {qty: oldStockReadLog.qty, qr_list: oldStockReadLog.qr_list})
+    await stock_read_log.updateOne({
+      payload: oldStockReadLog.payload}, {
+        qty: --oldStockReadLog.qty, 
+        qr_list: oldStockReadLog.qr_list.filter(el => el.payload !== element.payload)
+      })
   }
 
-  // Bagian ini digunakan apabila ingin menghapus rejected qr dari qr_list
-  // for (let i = 0; i < req.body.reject_qr_list.length; i++) {
-  //   const element = req.body.reject_qr_list[i];
-  //   qrData.splice(qrData.findIndex(el => el.payload === element.payload) ,1)
-  // }
+  for (const element of req.body.reject_qr_list) {
+    const id = qrData.findIndex(el => el.payload === element.payload)
+    if(id === -1) return res.json({statusCode: 0, message: `${element.payload} not found in ${data.payload} qr_list`})
+    data.qty--
 
-  // Bagian ini digunakan apabila ingin soft delete rejected qr dari qr_list dengan mengubah status sesuai dengan readme
-  for (let i = 0; i < req.body.reject_qr_list.length; i++) {
-    const element = req.body.reject_qr_list[i];
-    let id = qrData.findIndex(el => el.payload === element.payload)
+    // splice array qr and comment the qrData[id].status and status_qc if didn't want to use soft delete
+    // qrData.splice(id ,1) 
+
     qrData[id].status = 0
     qrData[id].status_qc = 1
-    data.qty--
   }
 
   await stock_read_log.updateOne({payload: data.payload}, {qty: data.qty, qr_list: data.qr_list})
 
-  res.json({statusCode: 1, data: data.qr_list.filter(el => el.status === 1)})
+  res.json({statusCode: 1, message: 'Success edit repacking data', data: data.qr_list.filter(el => el.status === 1)})
 
 })
 
